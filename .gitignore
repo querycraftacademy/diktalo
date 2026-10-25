@@ -1,0 +1,17 @@
+# Személyes beállítások (API-kulcs, szótár) – a repóban csak a config.example.json van
+config.json
+
+# Modellek, felvételek, gyorsítótárak
+models/
+recordings/
+.ov_cache/
+bin/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Naplók
+*.log

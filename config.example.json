@@ -1,0 +1,48 @@
+{
+  "hotkey": "ctrl+windows",
+  "mode": "hold",
+  "language": "hu",
+  "backend": "auto",
+  "device": "auto",
+  "model": "large-v3",
+  "threads": 0,
+  "openvino": {
+    "model": ""
+  },
+  "faster_whisper": {
+    "model": "",
+    "compute_type": "auto"
+  },
+  "whispercpp": {
+    "binary": "",
+    "model": "",
+    "extra_args": []
+  },
+  "max_seconds": 120,
+  "audio": {
+    "preroll_seconds": 0.6,
+    "tail_seconds": 0.25,
+    "keep_mic_open": true,
+    "normalize": true
+  },
+  "whisper_context": false,
+  "save_recordings": 0,
+  "ai_correction": false,
+  "minimax": {
+    "api_key_env": "MINIMAX_API_KEY",
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "api_style": "anthropic",
+    "timeout": 45,
+    "mode": "balanced",
+    "max_word_change": 0.25
+  },
+  "output": {
+    "method": "paste",
+    "restore_clipboard": false,
+    "append_space": true
+  },
+  "vocabulary": [],
+  "audio_device": null,
+  "beep": true
+}

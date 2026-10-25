@@ -1,0 +1,11 @@
+# Alapcsomagok: mindenkinek. Az OpenVINO adja az Intel GPU-s és a processzoros
+# (Intel és AMD x86 CPU) utat, ez a tartalék minden gépen.
+openvino-genai>=2025.1
+huggingface_hub
+sounddevice
+numpy
+keyboard
+pystray
+pillow
+pyperclip
+requests
