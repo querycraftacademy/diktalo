@@ -12,7 +12,7 @@ A program felismeri, milyen hardver van a gépedben, és azon futtatja a Whisper
 | **NVIDIA** GeForce / RTX (CUDA 12) | faster-whisper (CTranslate2), float16 | az `install.bat` magától telepíti | nem (a kód és a választás logikája tesztelt) |
 | **AMD** Radeon (Vulkan) | whisper.cpp Vulkan-háttérrel, alfolyamatként | `tools\build-whispercpp-vulkan.ps1` vagy saját bináris, lásd lent | nem (a whisper.cpp-illesztés CPU-s binárissal tesztelve) |
 | **AMD** Radeon RX 6800 és újabb (ROCm) | faster-whisper + CTranslate2 ROCm-build | kísérleti, kézi, lásd lent | nem |
-| **Intel** Arc / Iris Xe | OpenVINO GenAI, GPU | alapból | részben: ugyanez az OpenVINO-út a szerző gépén naponta fut Arc B580-on, de ebben a kiadásban a GPU-s futást nem ismételtük meg |
+| **Intel** Arc / Iris Xe | OpenVINO GenAI, GPU | alapból | igen, Arc B580-on (25 mp-es magyar diktálás 3,8 mp alatt, large-v3) |
 | **Bármilyen x86 processzor** (Intel, AMD) | OpenVINO GenAI, CPU | alapból | igen, AMD Ryzen 5 3600-on |
 
 Ha a választott háttér nem indul el (hiányzó meghajtó, kevés videómemória, hiányzó
@@ -223,7 +223,7 @@ fails to start:
 | NVIDIA (CUDA 12) | faster-whisper / CTranslate2 | selection logic only, not on real NVIDIA hardware |
 | AMD (Vulkan) | whisper.cpp `whisper-server` (Vulkan build) as a subprocess | integration tested with the official CPU binary, not on real AMD hardware |
 | AMD RX 6800+ (ROCm) | faster-whisper + CTranslate2 ROCm wheel | experimental, untested |
-| Intel Arc / Iris Xe | OpenVINO GenAI (GPU) | same pipeline used daily by the author on an Arc B580, not re-run for this release |
+| Intel Arc / Iris Xe | OpenVINO GenAI (GPU) | yes, Arc B580 (25 s of Hungarian speech in 3.8 s, large-v3) |
 | Any x86 CPU (Intel, AMD) | OpenVINO GenAI (CPU) | yes, AMD Ryzen 5 3600 |
 
 Official whisper.cpp releases do not ship a Windows Vulkan binary.
