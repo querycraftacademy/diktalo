@@ -15,3 +15,6 @@ __pycache__/
 
 # Naplók
 *.log
+
+# A futó program vezérlőportja (control.py)
+.diktalo.port

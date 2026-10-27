@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-BACKENDS = ("openvino", "faster-whisper", "whispercpp")
+BACKENDS = ("openvino", "faster-whisper", "whispercpp", "mlx")
 _ALIASES = {
     "auto": "auto",
     "openvino": "openvino",
@@ -22,12 +22,15 @@ _ALIASES = {
     "whispercpp": "whispercpp",
     "whisper.cpp": "whispercpp",
     "whisper-cpp": "whispercpp",
+    "mlx": "mlx",
+    "mlx-whisper": "mlx",
+    "mlx_whisper": "mlx",
 }
 
 
 @dataclass(frozen=True)
 class Candidate:
-    backend: str  # "openvino" | "faster-whisper" | "whispercpp"
+    backend: str  # "openvino" | "faster-whisper" | "whispercpp" | "mlx"
     device: str   # a háttér saját eszközneve: "GPU"/"GPU.1"/"CPU", "cuda"/"cuda:1"/"cpu", "gpu"/"gpu:1"/"cpu"
     reason: str
 
@@ -51,6 +54,7 @@ def _installed(hw, backend: str) -> bool:
         "openvino": hw.openvino,
         "faster-whisper": hw.faster_whisper,
         "whispercpp": bool(hw.whispercpp_binary),
+        "mlx": hw.mlx,
     }[backend]
 
 
@@ -68,6 +72,8 @@ def _cpu_chain(hw) -> list[Candidate]:
 def _gpu_chain(hw) -> list[Candidate]:
     """Automatikus GPU-sorrend: minden gyártóhoz a rá legjobban illő háttér."""
     chain = []
+    if hw.mlx:
+        chain.append(Candidate("mlx", "gpu", "Apple GPU, mlx-whisper (Metal)"))
     if hw.has("nvidia") and hw.faster_whisper and hw.cuda_devices:
         chain.append(Candidate("faster-whisper", "cuda", "NVIDIA GPU, faster-whisper (CUDA)"))
     if hw.has("amd") and hw.whispercpp_binary and hw.whispercpp_gpu == "vulkan":
@@ -84,7 +90,7 @@ def _gpu_chain(hw) -> list[Candidate]:
 
 
 def _backend_gpu_device(hw, backend: str) -> str:
-    return {"openvino": hw.openvino_gpu or "GPU", "faster-whisper": "cuda", "whispercpp": "gpu"}[backend]
+    return {"openvino": hw.openvino_gpu or "GPU", "faster-whisper": "cuda", "whispercpp": "gpu", "mlx": "gpu"}[backend]
 
 
 def _backend_cpu_device(backend: str) -> str:
@@ -170,6 +176,10 @@ def _load(candidate: Candidate, cfg: dict):
             binary, model, candidate.device, language=cfg.get("language", "hu"),
             threads=threads, extra_args=wc.get("extra_args") or [],
         )
+    if candidate.backend == "mlx":
+        from .mlx_backend import MlxTranscriber
+
+        return MlxTranscriber(model, candidate.device)
     raise ValueError(candidate.backend)
 
 
@@ -188,7 +198,9 @@ def create_transcriber(
     for w in warnings:
         log(f"FIGYELEM: {w}")
     if not candidates:
-        raise RuntimeError("Nincs telepített átíró háttér. Futtasd az install.bat-ot.")
+        from hardware import INSTALL_SCRIPT
+
+        raise RuntimeError(f"Nincs telepített átíró háttér. Futtasd az {INSTALL_SCRIPT} szkriptet.")
     loader = loader or _load
     errors = []
     for i, cand in enumerate(candidates):

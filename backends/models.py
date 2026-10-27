@@ -40,8 +40,19 @@ WHISPERCPP = {
     "turbo": "ggml-large-v3-turbo-q8_0.bin",
 }
 
-TABLES = {"openvino": OPENVINO, "faster-whisper": FASTER_WHISPER, "whispercpp": WHISPERCPP}
-CFG_SECTION = {"openvino": "openvino", "faster-whisper": "faster_whisper", "whispercpp": "whispercpp"}
+# MLX-modellek Apple Siliconra (Hugging Face, mlx-community szervezet)
+MLX = {
+    "tiny": "mlx-community/whisper-tiny-mlx",
+    "base": "mlx-community/whisper-base-mlx",
+    "small": "mlx-community/whisper-small-mlx",
+    "medium": "mlx-community/whisper-medium-mlx",
+    "large-v3": "mlx-community/whisper-large-v3-mlx",
+    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+    "turbo": "mlx-community/whisper-large-v3-turbo",
+}
+
+TABLES = {"openvino": OPENVINO, "faster-whisper": FASTER_WHISPER, "whispercpp": WHISPERCPP, "mlx": MLX}
+CFG_SECTION = {"openvino": "openvino", "faster-whisper": "faster_whisper", "whispercpp": "whispercpp", "mlx": "mlx"}
 
 
 def resolve(backend: str, cfg: dict) -> str:

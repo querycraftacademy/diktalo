@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import platform
 import shutil
 import site
 import subprocess
@@ -18,6 +19,20 @@ from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
 NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+IS_WINDOWS = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
+
+
+def is_apple_silicon() -> bool:
+    return IS_MAC and platform.machine() == "arm64"
+
+
+def venv_cmd(tool: str) -> str:
+    """A virtuális környezet egy parancsa, ahogy a felhasználó beírná (tippekhez)."""
+    return f".venv\\Scripts\\{tool}" if IS_WINDOWS else f".venv/bin/{tool}"
+
+
+INSTALL_SCRIPT = "install.bat" if IS_WINDOWS else "./install.sh"
 
 # Ezek nem valódi GPU-k (távoli asztal, virtuális kijelző, alap meghajtó)
 _IGNORED = ("microsoft basic", "remote display", "parsec", "virtual", "citrix", "vmware", "spacedesk")
@@ -26,7 +41,7 @@ _IGNORED = ("microsoft basic", "remote display", "parsec", "virtual", "citrix", 
 @dataclass(frozen=True)
 class GPU:
     name: str
-    vendor: str  # "nvidia" | "amd" | "intel" | "other"
+    vendor: str  # "nvidia" | "amd" | "intel" | "apple" | "other"
 
 
 @dataclass
@@ -39,9 +54,11 @@ class HardwareInfo:
     # faster-whisper telepítve van-e, és hány CUDA/HIP eszközt lát a CTranslate2
     faster_whisper: bool = False
     cuda_devices: int = 0
-    # whisper.cpp szerver binárisa és a GPU-háttere ("vulkan" | "cuda" | None)
+    # whisper.cpp szerver binárisa és a GPU-háttere ("vulkan" | "cuda" | "metal" | None)
     whispercpp_binary: str | None = None
     whispercpp_gpu: str | None = None
+    # mlx-whisper telepítve van-e (csak Apple Silicon Macen fut)
+    mlx: bool = False
     notes: list[str] = field(default_factory=list)
 
     def has(self, vendor: str) -> bool:
@@ -56,6 +73,8 @@ def vendor_from_name(name: str, company: str = "") -> str:
         return "amd"
     if any(k in low for k in ("intel", "iris", "uhd graphics", "arc(tm)")):
         return "intel"
+    if "apple" in low:
+        return "apple"
     return "other"
 
 
@@ -78,6 +97,52 @@ def parse_video_controllers(raw: str) -> list[GPU]:
     return gpus
 
 
+def parse_system_profiler(raw: str) -> list[GPU]:
+    """A macOS `system_profiler SPDisplaysDataType -json` kimenetének feldolgozása."""
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    gpus = []
+    for item in json.loads(raw).get("SPDisplaysDataType", []):
+        name = (item.get("sppci_model") or item.get("_name") or "").strip()
+        if not name:
+            continue
+        gpu = GPU(name, vendor_from_name(name, item.get("spdisplays_vendor") or ""))
+        if gpu not in gpus:
+            gpus.append(gpu)
+    return gpus
+
+
+def parse_lspci(raw: str) -> list[GPU]:
+    """Az `lspci` kimenetéből a videókártyák (pl. "01:00.0 VGA compatible controller: NVIDIA ...")."""
+    gpus = []
+    for line in (raw or "").splitlines():
+        if any(k in line for k in ("VGA compatible", "3D controller", "Display controller")):
+            name = line.split(":", 2)[-1].strip()
+            gpu = GPU(name, vendor_from_name(name))
+            if gpu not in gpus:
+                gpus.append(gpu)
+    return gpus
+
+
+# PCI gyártókódok a /sys/class/drm alatti tartalékhoz (ha nincs lspci)
+_PCI_VENDORS = {"0x10de": ("NVIDIA GPU", "nvidia"), "0x1002": ("AMD GPU", "amd"), "0x8086": ("Intel GPU", "intel")}
+
+
+def _linux_sysfs_gpus() -> list[GPU]:
+    gpus = []
+    for vendor_file in sorted(Path("/sys/class/drm").glob("card*/device/vendor")):
+        try:
+            code = vendor_file.read_text().strip().lower()
+        except OSError:
+            continue
+        if code in _PCI_VENDORS:
+            gpu = GPU(*_PCI_VENDORS[code])
+            if gpu not in gpus:
+                gpus.append(gpu)
+    return gpus
+
+
 def _run(cmd: list[str], timeout: float = 15) -> str:
     out = subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout, creationflags=NO_WINDOW,
@@ -96,12 +161,12 @@ def list_gpus() -> list[GPU]:
                 "Select-Object Name,AdapterCompatibility | ConvertTo-Json -Compress",
             ])
             return parse_video_controllers(raw)
+        if IS_MAC:
+            return parse_system_profiler(_run(["system_profiler", "SPDisplaysDataType", "-json"]))
         if shutil.which("lspci"):
-            gpus = []
-            for line in _run(["lspci"]).splitlines():
-                if any(k in line for k in ("VGA compatible", "3D controller", "Display controller")):
-                    name = line.split(":", 2)[-1].strip()
-                    gpus.append(GPU(name, vendor_from_name(name)))
+            return parse_lspci(_run(["lspci"]))
+        gpus = _linux_sysfs_gpus()
+        if gpus:
             return gpus
     except Exception:
         pass
@@ -117,22 +182,64 @@ def list_gpus() -> list[GPU]:
 
 # ---------- háttérpróbák ----------
 
-def add_nvidia_dll_dirs() -> None:
-    """A pip-ből telepített NVIDIA-könyvtárak (cuBLAS, cuDNN) DLL-mappáinak felvétele.
-
-    Windowson a nvidia-cublas-cu12 / nvidia-cudnn-cu12 csomagok a DLL-eket a
-    site-packages/nvidia/*/bin mappákba teszik, de ezeket a Windows magától nem
-    keresi. Az importálás előtt hozzá kell adni őket a keresési úthoz.
-    """
-    if sys.platform != "win32":
-        return
+def _site_roots() -> set[str]:
     roots = set()
     try:
         roots.update(site.getsitepackages())
     except Exception:
         pass
     roots.add(str(Path(sys.prefix) / "Lib" / "site-packages"))
-    for root in roots:
+    return roots
+
+
+_nvidia_libs_loaded = False
+
+
+def _preload_nvidia_libs() -> None:
+    """Linux: a pip-es cuBLAS/cuDNN .so-fájlok előtöltése.
+
+    A CTranslate2 a nevük alapján keresi őket, a site-packages/nvidia/*/lib
+    mappákat viszont a dinamikus betöltő nem ismeri, az LD_LIBRARY_PATH pedig
+    futás közben már nem módosítható. Ha a könyvtárakat előre, RTLD_GLOBAL-lal
+    betöltjük, a későbbi név szerinti keresés a már betöltöttet kapja meg.
+    """
+    global _nvidia_libs_loaded
+    if _nvidia_libs_loaded:
+        return
+    _nvidia_libs_loaded = True
+    import ctypes
+
+    pending = sorted({
+        str(p) for root in _site_roots() for p in Path(root).glob("nvidia/*/lib/lib*.so*")
+        if p.name.startswith(("libcublas", "libcudnn"))
+    })
+    # A sorrend számít (pl. cublasLt a cublas előtt), ezért amíg halad, újrapróbáljuk a sikerteleneket.
+    while pending:
+        failed = []
+        for path in pending:
+            try:
+                ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                failed.append(path)
+        if len(failed) == len(pending):
+            break
+        pending = failed
+
+
+def add_nvidia_dll_dirs() -> None:
+    """A pip-ből telepített NVIDIA-könyvtárak (cuBLAS, cuDNN) elérhetővé tétele.
+
+    Windowson a nvidia-cublas-cu12 / nvidia-cudnn-cu12 csomagok a DLL-eket a
+    site-packages/nvidia/*/bin mappákba teszik, de ezeket a Windows magától nem
+    keresi. Az importálás előtt hozzá kell adni őket a keresési úthoz. Linuxon
+    ugyanezt az előtöltés oldja meg (_preload_nvidia_libs).
+    """
+    if sys.platform.startswith("linux"):
+        _preload_nvidia_libs()
+        return
+    if sys.platform != "win32":
+        return
+    for root in _site_roots():
         base = Path(root) / "nvidia"
         if not base.is_dir():
             continue
@@ -186,12 +293,25 @@ def probe_ctranslate2() -> tuple[bool, int]:
         return True, 0
 
 
+def probe_mlx() -> bool:
+    """mlx-whisper (Apple Silicon GPU, Metal). Csak arm64-es Macen értelmes."""
+    return is_apple_silicon() and bool(importlib.util.find_spec("mlx_whisper"))
+
+
 def _server_name() -> str:
     return "whisper-server.exe" if sys.platform == "win32" else "whisper-server"
 
 
+def gpu_from_libs(names: set[str]) -> str | None:
+    """A whisper.cpp GPU-háttere a mellette lévő ggml-könyvtárak nevéből (.dll, .so, .dylib)."""
+    for kind in ("vulkan", "cuda", "metal"):
+        if any(f"ggml-{kind}" in n for n in names):
+            return kind
+    return None
+
+
 def find_whispercpp(binary: str = "") -> tuple[str | None, str | None]:
-    """(whisper-server útja, GPU-háttér). A GPU-hátteret a mellette lévő ggml-DLL-ekből látjuk."""
+    """(whisper-server útja, GPU-háttér). A GPU-hátteret a mellette lévő ggml-könyvtárakból látjuk."""
     candidates = []
     if binary:
         candidates.append(Path(binary))
@@ -201,13 +321,15 @@ def find_whispercpp(binary: str = "") -> tuple[str | None, str | None]:
         candidates.append(Path(found))
     for path in candidates:
         if path.is_file():
-            folder = path.parent
-            names = {p.name.lower() for p in folder.iterdir()}
-            if any("ggml-vulkan" in n for n in names):
-                return str(path), "vulkan"
-            if any("ggml-cuda" in n for n in names):
-                return str(path), "cuda"
-            return str(path), None
+            folder = path.resolve().parent
+            names = set()
+            for d in (folder, folder.parent / "lib"):  # Linux/macOS: a könyvtárak a ../lib alatt is lehetnek
+                if d.is_dir():
+                    names.update(p.name.lower() for p in d.iterdir())
+            gpu = gpu_from_libs(names)
+            if gpu is None and is_apple_silicon():
+                gpu = "metal"  # Apple Siliconon a whisper.cpp alapból Metallal fordul (a könyvtárba ágyazva)
+            return str(path), gpu
     return None, None
 
 
@@ -218,13 +340,18 @@ def detect(cfg: dict | None = None) -> HardwareInfo:
     info.faster_whisper, info.cuda_devices = probe_ctranslate2()
     binary = (cfg.get("whispercpp") or {}).get("binary", "")
     info.whispercpp_binary, info.whispercpp_gpu = find_whispercpp(binary)
+    info.mlx = probe_mlx()
 
     # Tippek a felhasználónak, ha a hardvere többre képes, mint ami telepítve van
+    if is_apple_silicon() and not info.mlx:
+        info.notes.append(
+            f"Apple Silicon Mac, de az mlx-whisper nincs telepítve (GPU-hoz): {venv_cmd('pip')} install mlx-whisper"
+        )
     if info.has("nvidia") and not info.cuda_devices:
         if not info.faster_whisper:
             info.notes.append(
                 "NVIDIA GPU van a gépben, de a faster-whisper nincs telepítve: "
-                ".venv\\Scripts\\pip install -r requirements-nvidia.txt"
+                f"{venv_cmd('pip')} install -r requirements-nvidia.txt"
             )
         else:
             info.notes.append(
@@ -232,12 +359,13 @@ def detect(cfg: dict | None = None) -> HardwareInfo:
                 "Frissítsd az NVIDIA-meghajtót, és ellenőrizd a requirements-nvidia.txt csomagjait."
             )
     if info.has("amd") and info.whispercpp_gpu != "vulkan" and not (info.cuda_devices and not info.has("nvidia")):
+        script = "tools\\build-whispercpp-vulkan.ps1" if IS_WINDOWS else "tools/build-whispercpp.sh"
         info.notes.append(
             "AMD GPU van a gépben, de nincs Vulkanos whisper.cpp: a program a processzoron fut. "
-            "GPU-hoz lásd a README 'AMD GPU' szakaszát (tools\\build-whispercpp-vulkan.ps1)."
+            f"GPU-hoz lásd a README 'AMD GPU' szakaszát ({script})."
         )
-    if not (info.openvino or info.faster_whisper or info.whispercpp_binary):
-        info.notes.append("Egyetlen átíró háttér sincs telepítve: futtasd az install.bat-ot.")
+    if not (info.openvino or info.faster_whisper or info.whispercpp_binary or info.mlx):
+        info.notes.append(f"Egyetlen átíró háttér sincs telepítve: futtasd az {INSTALL_SCRIPT} szkriptet.")
     return info
 
 
@@ -255,4 +383,6 @@ def describe(info: HardwareInfo) -> str:
     if info.whispercpp_binary:
         wc = f"{info.whispercpp_binary} (GPU-háttér: {info.whispercpp_gpu or 'nincs, csak CPU'})"
     lines += [f"OpenVINO:       {ov}", f"faster-whisper: {fw}", f"whisper.cpp:    {wc}"]
+    if IS_MAC:
+        lines.append(f"mlx-whisper:    {'telepítve (Apple GPU)' if info.mlx else 'nincs telepítve'}")
     return "\n".join(lines)

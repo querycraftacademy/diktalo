@@ -2,8 +2,9 @@
 
 A whisper-server egyszer tölti be a modellt, utána minden diktálás egy helyi
 HTTP-kérés (127.0.0.1). A GPU-t a bináris dönti el: egy Vulkanos build
-(ggml-vulkan.dll) AMD-, Intel- és NVIDIA-kártyán is fut, a CPU-s build csak
-processzoron. A "cpu" eszköz a --no-gpu kapcsolót adja át.
+(ggml-vulkan.dll / libggml-vulkan.so) AMD-, Intel- és NVIDIA-kártyán is fut,
+macOS-en a Metal az Apple GPU-n, a CPU-s build csak processzoron. A "cpu"
+eszköz a --no-gpu kapcsolót adja át.
 """
 import atexit
 import io
@@ -79,7 +80,7 @@ class WhisperCppTranscriber:
 
         if not binary or not Path(binary).is_file():
             raise FileNotFoundError(
-                "whisper-server nem található (bin\\whispercpp\\whisper-server.exe vagy config: whispercpp.binary)"
+                "whisper-server nem található (bin/whispercpp/ mappa vagy config: whispercpp.binary)"
             )
         self._requests = requests
         model_path = ensure_model(model)

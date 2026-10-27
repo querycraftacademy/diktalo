@@ -1,13 +1,14 @@
 """
-Diktáló – helyi, internet nélküli beszédfelismerés Windowsra.
+Diktáló – helyi, internet nélküli beszédfelismerés Windowsra, macOS-re és Linuxra.
 
   gyorsbillentyű nyomva tartva -> mikrofonfelvétel -> Whisper (a gépeden) ->
   beillesztés oda, ahol a kurzor áll.
 
 A Whisper azon a hardveren fut, ami a gépedben van: NVIDIA GPU-n faster-whisperrel,
-Intel GPU-n OpenVINO-val, AMD GPU-n whisper.cpp Vulkannal, ezek híján a processzoron.
+Intel GPU-n OpenVINO-val, AMD GPU-n whisper.cpp Vulkannal, Apple Silicon Macen
+mlx-whisperrel, ezek híján a processzoron.
 
-Indítás:  start.bat   (vagy: .venv\\Scripts\\python app.py)
+Indítás:  Windows: start.bat   macOS/Linux: ./start.sh
 """
 import datetime
 import sys
@@ -16,12 +17,13 @@ import time
 import wave
 from pathlib import Path
 
-import keyboard
 import numpy as np
 from PIL import Image, ImageDraw
 
 import config as config_mod
+import control
 import hardware
+import hotkeys
 import output as output_mod
 from backends import create_transcriber
 from corrector import Corrector
@@ -52,11 +54,33 @@ def make_icon(color):
 
 def beep(freq, dur=120):
     try:
-        import winsound
+        if sys.platform == "win32":
+            import winsound
 
-        threading.Thread(target=winsound.Beep, args=(freq, dur), daemon=True).start()
+            threading.Thread(target=winsound.Beep, args=(freq, dur), daemon=True).start()
+            return
+        import sounddevice as sd
+
+        rate = 22050
+        t = np.arange(int(rate * dur / 1000)) / rate
+        fade = np.minimum(1.0, np.minimum(t, t[-1] - t) / 0.01)  # 10 ms be- és kiúsztatás, nem pattog
+        tone = (0.2 * np.sin(2 * np.pi * freq * t) * fade).astype(np.float32)
+        threading.Thread(target=sd.play, args=(tone, rate), daemon=True).start()
     except Exception:
         pass
+
+
+def on_main_thread(fn):
+    """macOS-en a tálcaikont csak a fő szálról szabad frissíteni."""
+    if sys.platform == "darwin":
+        try:
+            from PyObjCTools import AppHelper
+
+            AppHelper.callAfter(fn)
+            return
+        except Exception:
+            pass
+    fn()
 
 
 class App:
@@ -90,6 +114,7 @@ class App:
         # Utolsó néhány diktált mondat (opcionális kontextus a Whispernek és a javítónak)
         self.history: list[str] = []
         self.icon = None
+        self._quit = threading.Event()
 
     def _context(self, max_chars: int) -> str:
         ctx = " ".join(self.history)
@@ -122,8 +147,9 @@ class App:
 
     def set_state(self, state):
         self.state = state
-        if self.icon is not None:
-            self.icon.icon = make_icon(COLORS[state])
+        icon = self.icon
+        if icon is not None:
+            on_main_thread(lambda: setattr(icon, "icon", make_icon(COLORS[state])))
 
     # ---------- felvétel vezérlés ----------
 
@@ -185,7 +211,7 @@ class App:
                 if new_rms < -40.0:
                     print(
                         f"FIGYELEM: a felerősítés után is halk a felvétel ({new_rms} dB), "
-                        "emeld a mikrofon szintjét a Windows hangbeállításaiban."
+                        "emeld a mikrofon szintjét a rendszer hangbeállításaiban."
                     )
             t0 = time.time()
             with self._transcribe_lock:
@@ -201,12 +227,16 @@ class App:
                 print(f'MiniMax ({time.time() - t0:.2f}s alatt): "{text}"')
             self.history.append(text)
             del self.history[:-5]
-            output_mod.deliver(
+            pasted = output_mod.deliver(
                 text,
                 method=self.cfg["output"]["method"],
                 restore_clipboard=self.cfg["output"]["restore_clipboard"],
                 append_space=self.cfg["output"].get("append_space", True),
             )
+            if not pasted:
+                msg = f"A szöveg a vágólapon van, illeszd be: {output_mod.paste_shortcut()}"
+                print(msg + " (Waylandhez telepítsd a wtype vagy a ydotool csomagot, lásd README)")
+                self.notify(msg)
         except Exception as e:
             print(f"Feldolgozási hiba: {e}")
             self.notify("Hiba történt - részletek a konzolban")
@@ -214,25 +244,52 @@ class App:
             self.set_state(STATE_IDLE)
 
     def notify(self, msg):
-        if self.icon is not None:
-            try:
-                self.icon.notify(msg, "Diktáló")
-            except Exception:
-                pass
+        icon = self.icon
+        if icon is not None:
+            def show():
+                try:
+                    icon.notify(msg, "Diktáló")
+                except Exception:
+                    pass
+
+            on_main_thread(show)
 
     # ---------- gyorsbillentyű ----------
 
     def setup_hotkey(self):
-        hotkey = self.cfg["hotkey"]
+        """A gyorsbillentyű figyelése; a visszaadott függvény leállítja (None: nincs figyelés)."""
+        hotkey = (self.cfg["hotkey"] or "").strip()
+        toggle_cmd = ".venv\\Scripts\\python control.py toggle" if sys.platform == "win32" \
+            else str(Path(__file__).resolve().parent / "toggle.sh")
+        if not hotkey:
+            print(f"Nincs gyorsbillentyű beállítva. Felvétel ki/be: {toggle_cmd}")
+            return None
+        if output_mod.is_wayland():
+            print(
+                "Wayland alatt a program nem figyelheti a billentyűzetet. Állíts be egy\n"
+                "billentyűparancsot az asztali környezetben (pl. GNOME: Beállítások ->\n"
+                "Billentyűzet -> Saját billentyűparancsok), ami ezt futtatja:\n"
+                f"    {toggle_cmd}\n"
+                "Részletek a README Linux-szakaszában."
+            )
+            return None
+        try:
+            stop = hotkeys.register(
+                hotkey, self.cfg["mode"], self.start_recording, self.stop_recording, self.toggle_recording
+            )
+        except Exception as e:
+            print(f"A gyorsbillentyű nem állítható be ({e}). Felvétel ki/be: {toggle_cmd}")
+            return None
+        if sys.platform == "darwin":
+            print(
+                "macOS: ha a gyorsbillentyű nem reagál, engedélyezd a Terminált a Rendszerbeállítások ->\n"
+                "Adatvédelem és biztonság -> Bemenetfigyelés és Kisegítő lehetőségek listáján, majd indítsd újra."
+            )
         if self.cfg["mode"] == "hold":
-            # hold mód: kombináció lenyomása indít, bármelyik tag felengedése leállít
-            keyboard.add_hotkey(hotkey, self.start_recording)
-            for key in hotkey.split("+"):
-                keyboard.on_release_key(key.strip(), lambda e: self.stop_recording(), suppress=False)
             print(f"Nyomva tartás mód: tartsd nyomva a(z) [{hotkey}] kombinációt diktáláshoz.")
         else:
-            keyboard.add_hotkey(hotkey, self.toggle_recording)
             print(f"Kapcsoló mód: [{hotkey}] indít, még egyszer [{hotkey}] leállít.")
+        return stop
 
     # ---------- tálcaikon ----------
 
@@ -240,37 +297,69 @@ class App:
         self.ai_enabled = not self.ai_enabled
         print(f"AI-javítás: {'BE' if self.ai_enabled else 'KI'}")
 
-    def run(self):
-        import pystray
+    def quit(self):
+        self._quit.set()
+        icon = self.icon
+        if icon is not None:
+            on_main_thread(icon.stop)
 
-        self.setup_hotkey()
+    def _run_tray(self) -> bool:
+        """Tálcaikonos futás. False, ha a rendszeren nem indul tálcaikon (akkor konzolos mód jön)."""
+        try:
+            import pystray
+
+            menu = pystray.Menu(
+                pystray.MenuItem(lambda item: f"Állapot: {STATE_LABELS[self.state]}", None, enabled=False),
+                pystray.MenuItem(f"Átírás: {self.backend_label}", None, enabled=False),
+                pystray.MenuItem(
+                    "AI-javítás (MiniMax, felhős)",
+                    self.toggle_ai,
+                    checked=lambda item: self.ai_enabled,
+                    enabled=self.corrector.available,
+                ),
+                pystray.MenuItem("Kilépés", lambda icon, item: self.quit()),
+            )
+            self.icon = pystray.Icon("diktalo", make_icon(COLORS[STATE_IDLE]), "Diktáló (helyi Whisper)", menu)
+        except Exception as e:
+            print(f"A tálcaikon nem indítható ({e}).")
+            self.icon = None
+            return False
+        print("Kész! A program a tálcán fut.")
+        self.icon.run()
+        return True
+
+    def run(self):
+        stop_hotkey = self.setup_hotkey()
+        server = None
+        try:
+            server = control.ControlServer({
+                "toggle": self.toggle_recording,
+                "start": self.start_recording,
+                "stop": self.stop_recording,
+                "quit": self.quit,
+            })
+        except OSError as e:
+            print(f"(a parancssori vezérlés nem indult: {e})")
         mic = device_name(self.cfg["audio_device"])
         print(f"Mikrofon: {mic}")
         if looks_like_webcam(mic):
             print(
                 "FIGYELEM: ez kameramikrofonnak tűnik! Az távol vesz, és sokat ront az\n"
-                "          átíráson. Állítsd át a Windows hangbeállításaiban, vagy írd be a\n"
+                "          átíráson. Állítsd át a rendszer hangbeállításaiban, vagy írd be a\n"
                 '          config.json "audio_device" mezőjébe a kívánt mikrofon nevét.'
             )
         self.recorder.open()  # mikrofon megnyitása, hogy a körpuffer feltöltődjön
-        menu = pystray.Menu(
-            pystray.MenuItem(lambda item: f"Állapot: {STATE_LABELS[self.state]}", None, enabled=False),
-            pystray.MenuItem(f"Átírás: {self.backend_label}", None, enabled=False),
-            pystray.MenuItem(
-                "AI-javítás (MiniMax, felhős)",
-                self.toggle_ai,
-                checked=lambda item: self.ai_enabled,
-                enabled=self.corrector.available,
-            ),
-            pystray.MenuItem("Kilépés", lambda icon, item: icon.stop()),
-        )
-        self.icon = pystray.Icon("diktalo", make_icon(COLORS[STATE_IDLE]), "Diktáló (helyi Whisper)", menu)
-        print("Kész! A program a tálcán fut.")
         try:
-            self.icon.run()
+            if not (self.cfg.get("tray", True) and self._run_tray()):
+                print("Kész! A program ebben az ablakban fut. Kilépés: Ctrl+C.")
+                while not self._quit.wait(0.5):
+                    pass
         finally:
             self.recorder.close()
-            keyboard.unhook_all()
+            if stop_hotkey:
+                stop_hotkey()
+            if server:
+                server.close()
             close = getattr(self.transcriber, "close", None)
             if close:
                 close()

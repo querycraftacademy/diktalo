@@ -13,13 +13,14 @@ CONFIG_PATH = APP_DIR / "config.json"
 EXAMPLE_PATH = APP_DIR / "config.example.json"
 
 DEFAULTS = {
-    # Gyorsbillentyű a "keyboard" csomag szintaxisával (pl. "ctrl+windows", "f9", "right shift")
+    # Gyorsbillentyű, pl. "ctrl+windows", "f9", "right shift". A "windows" Macen a Command,
+    # Linuxon a Super billentyű. Üres string = nincs gyorsbillentyű, csak a control.py vezérel.
     "hotkey": "ctrl+windows",
     # "hold": amíg nyomva tartod, addig vesz fel | "toggle": egy lenyomás indít, még egy leállít
     "mode": "hold",
     # Diktálás nyelve (ISO-kód). Üres string = automatikus nyelvfelismerés.
     "language": "hu",
-    # Átíró háttér: "auto" | "openvino" | "faster-whisper" | "whispercpp"
+    # Átíró háttér: "auto" | "openvino" | "faster-whisper" | "whispercpp" | "mlx"
     "backend": "auto",
     # Eszköz: "auto" | "gpu" | "cpu", vagy a háttér saját neve ("GPU.1", "cuda:1", "gpu:1")
     "device": "auto",
@@ -45,6 +46,10 @@ DEFAULTS = {
         "model": "",
         # További parancssori kapcsolók a whisper-servernek, pl. ["--beam-size", "5"]
         "extra_args": [],
+    },
+    "mlx": {
+        # Hugging Face repó vagy helyi mappa, pl. "mlx-community/whisper-large-v3-turbo"
+        "model": "",
     },
     # Maximális felvételhossz másodpercben (biztonsági korlát toggle módhoz)
     "max_seconds": 120,
@@ -91,6 +96,8 @@ DEFAULTS = {
     "audio_device": None,
     # Hangjelzés felvétel indításakor/leállításakor
     "beep": True,
+    # Tálcaikon (menüsor-ikon). Ha a rendszer nem tud ilyet, a program konzolos módban fut.
+    "tray": True,
 }
 
 

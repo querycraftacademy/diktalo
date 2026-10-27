@@ -42,7 +42,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("wav", nargs="?", help="16 bites PCM WAV-fájl")
     ap.add_argument("--detect", action="store_true", help="csak hardver-felismerés és választási terv")
-    ap.add_argument("--backend", help="auto | openvino | faster-whisper | whispercpp")
+    ap.add_argument("--backend", help="auto | openvino | faster-whisper | whispercpp | mlx")
     ap.add_argument("--device", help="auto | gpu | cpu | háttér saját eszközneve")
     ap.add_argument("--model", help="pl. large-v3, large-v3-turbo, medium, small, base")
     ap.add_argument("--language", help="pl. hu (üres = automatikus)")
@@ -55,7 +55,7 @@ def main(argv=None) -> int:
         if val is not None:
             cfg[key] = val
     if args.model:  # a parancssori modell felülírja a háttérenkénti beállítást is
-        for section in ("openvino", "faster_whisper", "whispercpp"):
+        for section in ("openvino", "faster_whisper", "whispercpp", "mlx"):
             cfg[section]["model"] = ""
 
     hw = hardware.detect(cfg)

@@ -18,6 +18,9 @@
     "model": "",
     "extra_args": []
   },
+  "mlx": {
+    "model": ""
+  },
   "max_seconds": 120,
   "audio": {
     "preroll_seconds": 0.6,
@@ -44,5 +47,6 @@
   },
   "vocabulary": [],
   "audio_device": null,
-  "beep": true
+  "beep": true,
+  "tray": true
 }

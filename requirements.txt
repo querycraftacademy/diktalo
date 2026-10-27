@@ -1,11 +1,22 @@
-# Alapcsomagok: mindenkinek. Az OpenVINO adja az Intel GPU-s és a processzoros
-# (Intel és AMD x86 CPU) utat, ez a tartalék minden gépen.
-openvino-genai>=2025.1
+# Alapcsomagok: mindenkinek. A pip a sorok végén álló feltételek alapján csak
+# azt telepíti, ami a te rendszeredhez való (Windows, macOS, Linux).
 huggingface_hub
 sounddevice
 numpy
-keyboard
 pystray
 pillow
 pyperclip
 requests
+
+# Gyorsbillentyű és beillesztés: Windowson a keyboard, macOS-en és Linuxon a pynput
+keyboard; sys_platform == "win32"
+pynput>=1.7.6; sys_platform != "win32"
+
+# OpenVINO: Intel GPU és bármilyen x86 processzor (Intel, AMD), Windowson és Linuxon
+openvino-genai>=2025.1; sys_platform != "darwin" and (platform_machine == "AMD64" or platform_machine == "x86_64")
+
+# Processzoros út ott, ahol nincs OpenVINO: Mac és ARM-os Linux (pl. Raspberry Pi)
+faster-whisper>=1.1; sys_platform == "darwin" or platform_machine == "aarch64"
+
+# Apple Silicon (M1–M4) GPU, Metal
+mlx-whisper; sys_platform == "darwin" and platform_machine == "arm64"
